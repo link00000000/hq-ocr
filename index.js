@@ -21,14 +21,37 @@
 // Support for different screencasting software
 // Support for emulation with automatic answer selection
 
+// node_modules
 var screenshot = require('screenshot-desktop');
 var jimp = require('jimp');
 var tesseract = require('node-tesseract');
 var path = require('path');
 var google = require('google'); google.resultsPerPage = 25;
 
+// Keeps track of all async calls to wait for all to complete before continuing
+var completedAsyncCalls = {
+  question: false,
+  ansOne: false,
+  ansTwo: false,
+  ansThree: false,
+  googleSearch: false
+}
+
+// Global variables that house resultant text of OCR
+var questionText,
+    ansOneText,
+    ansTwoText,
+    ansThreeText,
+    googleSearchResultText;
+
 // Screenshot of main monitor taken
 screenshot().then(function(img) {
+
+  // If sample image is supplied via command line argument
+  // override image buffer with sample image
+  if(process.argv[2]) {
+    img = process.argv[2];
+  }
 
   // Image buffer casted to JIMP object
   jimp.read(img, function(err, image) {
@@ -55,17 +78,27 @@ screenshot().then(function(img) {
 
           // Concats multiple lines of text to single line with spaces
           text = text.replace(/\n/g, ' '); 
-          console.log("Question: %s", text);
+          questionText = text;
+          console.log('Question: %s', text);
+
+          completedAsyncCalls.question = true;
+          // Call to completedOCR not required because google search must fall directly afterwards
+          // and completedOCR will be called at the conclusion of google search results
+          // completedOCR();
 
           google(text, function(err, res) {
             if (err) throw err;
-            for(var i = 0; i < res.links.length; i++) {
 
-              // Displays first 25 google results
-              console.log('%s - %s\n\n%s\n\n', res.links[i].title, res.links[i].href, res.links[i].description);
+            // Concats all Google Search results into single string able to be parsed
+            res.links.shift();
+            googleSearchResultText = res.links.map(obj => Object.values(obj).join(' ')).join(' ');
+            console.log('Google Search results fetched successfully!');
 
-            }
+            completedAsyncCalls.googleSearch = true;
+            completedOCR();
+
           });
+
         });
 
       });
@@ -81,7 +114,14 @@ screenshot().then(function(img) {
 
         tesseract.process(path.join(__dirname, 'ansOne.png'), function(err, text) {
           if (err) throw err;
-          console.log("Answer One: %s", text);
+          
+          // Concats multiple lines of text to single line with spaces
+          text = text.replace(/\n/g, ' '); 
+          ansOneText = text;
+          console.log('Answer One: %s', text);
+          completedAsyncCalls.ansOne = true;
+          completedOCR();
+
         });
       
       });
@@ -97,7 +137,14 @@ screenshot().then(function(img) {
 
         tesseract.process(path.join(__dirname, 'ansTwo.png'), function(err, text) {
           if (err) throw err;
-          console.log("Answer Two: %s", text);
+
+          // Concats multiple lines of text to single line with spaces
+          text = text.replace(/\n/g, ' ');
+          ansTwoText = text;
+          console.log('Answer Two: %s', text);
+          completedAsyncCalls.ansTwo = true;
+          completedOCR();
+
         });
       
       });
@@ -113,7 +160,14 @@ screenshot().then(function(img) {
 
         tesseract.process(path.join(__dirname, 'ansThree.png'), function(err, text) {
           if (err) throw err;
-          console.log("Answer Three: %s", text);
+          
+          // Concats multiple lines of text to single line with spaces
+          text = text.replace(/\n/g, ' '); 
+          ansThreeText = text;
+          console.log('Answer Three: %s', text);
+          completedAsyncCalls.ansThree = true;
+          completedOCR();
+
         });
       
       });
@@ -121,3 +175,57 @@ screenshot().then(function(img) {
   });
 
 });
+
+function completedOCR() {
+
+  // Adds all values of completedAsyncCalls object
+  // to be compared to length of object.
+  // if length of object == added values then all async calls for OCR are complete
+  var addedVals = Object.values(completedAsyncCalls).reduce((a, b) => a + b, 0);
+  if(addedVals == Object.keys(completedAsyncCalls).length) {
+
+    // Parses Google Search results for answers or parts of answers
+    var answers = [
+      {
+        text: ansOneText.trim().split(' '),
+        score: 0
+      },
+      {
+        text: ansTwoText.trim().split(' '),
+        score: 0
+      },
+      {
+        text: ansThreeText.trim().split(' '),
+        score: 0
+      }
+    ];
+    var results = queryFrequencyScorer(googleSearchResultText, answers);
+    
+    // Sorts answers in order of score greatest to least
+    results.sort((a, b) => b.score - a.score);
+    
+    // Displays the ordered answers with answer text and score
+    // Format:
+    // ${answerText} - score: ${score}
+    console.log('\n===========\n  Answers\n===========');
+    results.forEach((ans) => console.log('%s - score: %s', ans.text.join(' '), ans.score));
+
+  }
+
+}
+
+function queryFrequencyScorer(results, query) {
+
+  for(var i in query) {
+    for(var j in query[i].text) {
+      var occurrences = results.match(new RegExp(query[i].text[j], 'g'));
+      if(occurrences) {
+        // Adds number of occurences of each word to the score of the corresponding answer
+        query[i].score += occurrences.length;
+      }
+    }
+  }
+  
+  return query;
+
+}
